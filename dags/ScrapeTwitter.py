@@ -76,7 +76,7 @@ def createTwitterDag(start_date, dag_id, dag):
         dag=dag
     )
 
-dag = DAG('ScrapeTwitter',default_args=default_args,catchup=False)
+dag = DAG('ScrapeTwitter', default_args=default_args, schedule_interval="@once", catchup=False)
 
 #I will do monthly
 start_date = datetime.datetime(2020, 1, 1)
