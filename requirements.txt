@@ -5,4 +5,9 @@ httplib2
 google-cloud
 google-api-python-client
 google-auth-httplib2
-git+https://github.com/twintproject/twint.git@origin/master#egg=twint
+pandas
+xlrd
+OleFileIO-PL
+pyarrow
+aiohttp
+alpha_vantage
