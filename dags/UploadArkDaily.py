@@ -8,7 +8,7 @@ from google.cloud import storage
 from google.oauth2 import service_account
 from typing import Tuple, Optional, List, Union
 from pathlib import Path
-import OleFileIO_PL
+import olefile
 import pandas as pd
 import uuid
 import glob
@@ -38,7 +38,7 @@ def load_ark_xls(path_str: str,
         return df
 
     with open(path, 'rb') as file:
-        ole = OleFileIO_PL.OleFileIO(file)
+        ole = olefile.OleFileIO(file)
         if ole.exists('Workbook'):
             d = ole.openstream('Workbook')
             df = pd.read_excel(d, engine='xlrd', skiprows=skiprows, header=header, usecols=usecols)
