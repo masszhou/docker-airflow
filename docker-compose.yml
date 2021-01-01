@@ -12,7 +12,7 @@ services:
                 max-file: "3"
 
     webserver:
-        image: masszhou/docker-airflow:1.10.9-gcp-twint
+        image: masszhou/docker-airflow:1.10.9-gcp
         restart: always
         depends_on:
             - postgres

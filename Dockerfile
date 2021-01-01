@@ -1,7 +1,8 @@
 # changes:
 # 1. integrated gcp twint into image
 # 2. fix SQLAlchemy==1.3.15
-# BUILD: docker build --rm --build-arg AIRFLOW_DEPS="gcp" -t masszhou/docker-airflow:1.10.9-gcp-twint .
+# BUILD: docker build --rm --build-arg AIRFLOW_DEPS="gcp" -t masszhou/docker-airflow:1.10.9-gcp .
+# DEBUG: docker exec -ti docker-airflow_webserver_1 bash 
 
 # VERSION 1.10.9
 # AUTHOR: Matthieu "Puckel_" Roisil
@@ -68,7 +69,6 @@ RUN set -ex \
     && pip install apache-airflow[crypto,celery,postgres,hive,jdbc,mysql,ssh${AIRFLOW_DEPS:+,}${AIRFLOW_DEPS}]==${AIRFLOW_VERSION} \
     && pip install 'redis==3.2' \
     && pip install pandas numpy google-cloud-storage httplib2 google-cloud google-api-python-client google-auth-httplib2 \
-    && pip install git+https://github.com/twintproject/twint.git@origin/master#egg=twint \
     && if [ -n "${PYTHON_DEPS}" ]; then pip install ${PYTHON_DEPS}; fi \
     && apt-get purge --auto-remove -yqq $buildDeps \
     && apt-get autoremove -yqq --purge \

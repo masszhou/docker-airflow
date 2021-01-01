@@ -11,3 +11,4 @@ olefile
 pyarrow
 aiohttp
 alpha_vantage
+git+https://github.com/twintproject/twint.git@origin/master#egg=twint
