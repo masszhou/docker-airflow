@@ -14,6 +14,9 @@ import uuid
 import glob
 
 
+LOGGER = logging.getLogger("airflow.task")
+
+
 default_args = {
     "owner": "zhiliang zhou",
     "depends_on_past": False,
@@ -63,7 +66,8 @@ def load_ark_xls(path_str: str,
 
 def uploadLocalArkDailyToGCS(credentials_path: str,
                              project_id: str,
-                             bucket_name: str):
+                             bucket_name: str,
+                             **kwargs):
     """setting up the google credentials"""
     credentials = service_account.Credentials.from_service_account_file(credentials_path) if credentials_path else None
     storage_client = storage.Client(project=project_id, credentials=credentials)
@@ -81,8 +85,9 @@ def uploadLocalArkDailyToGCS(credentials_path: str,
 
         if bucket.get_blob(gcs_file) is None:
             bucket.blob(gcs_file).upload_from_string(df_ark.to_csv(), 'text/csv')
+            LOGGER.info(f'{gcs_file} uploaded to project <{project_id}> in GCS <{bucket_name}> ')
         else:
-            logging.info(f'this file exist: {gcs_file}')
+            LOGGER.info(f'this file exist on GCS: {gcs_file}')
 
 
 dag = DAG("UploadArkDaily", default_args=default_args, schedule_interval="@daily")
@@ -92,9 +97,9 @@ with dag:
         python_callable=uploadLocalArkDailyToGCS,
         provide_context=True,
         op_kwargs={
+            'credentials_path': '/usr/local/airflow/dags/project-ark2-b9b253cd02fa.json',
+            'project_id': 'project-ark2',
             'bucket_name': 'storage-ark2',
-            'project': 'project-ark2',
-            'credentials_path': '/usr/local/airflow/dags/project-ark2-b9b253cd02fa.json'
         },
     )
 
