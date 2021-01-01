@@ -1,17 +1,22 @@
-from datetime import timedelta, datetime
-from airflow import DAG
-from airflow.contrib.operators.gcs_to_bq import GoogleCloudStorageToBigQueryOperator
-from airflow.operators.python_operator import PythonOperator, BranchPythonOperator
 import logging
-import datetime
-from google.cloud import storage
-from google.oauth2 import service_account
-from typing import Tuple, Optional, List, Union
 from pathlib import Path
-import olefile
 import pandas as pd
 import uuid
 import glob
+import datetime
+
+import olefile
+
+from airflow import DAG
+from airflow.contrib.operators.gcs_to_bq import GoogleCloudStorageToBigQueryOperator
+from airflow.operators.python_operator import PythonOperator, BranchPythonOperator
+from airflow.operators.dummy_operator import DummyOperator
+
+from google.cloud import bigquery
+from google.cloud import storage
+from google.oauth2 import service_account
+
+from typing import Tuple, Optional, List, Union
 
 
 LOGGER = logging.getLogger("airflow.task")
@@ -25,6 +30,13 @@ default_args = {
     "email_on_retry": False,
     "retries": 0
 }
+
+
+def fix_exceptions(df: pd.DataFrame) -> pd.DataFrame:
+    if '% Trade' in df.columns:
+        # ARK_Trade_09082020.xls
+        df = df.rename(columns={'% Trade': 'PercentOfETF'})
+    return df
 
 
 def load_ark_xls(path_str: str,
@@ -59,48 +71,101 @@ def load_ark_xls(path_str: str,
             # add UUID for database
             df['id'] = [uuid.uuid4().hex for _ in range(len(df.index))]
             df["id"] = df["id"].astype('unicode')
+            # apply bigquery convention rule
             df = df.rename(columns={'% of ETF': 'PercentOfETF'})
+            df = fix_exceptions(df)
 
     return df
 
 
-def uploadLocalArkDailyToGCS(credentials_path: str,
-                             project_id: str,
-                             bucket_name: str,
-                             **kwargs):
+def upload_to_bigquery(df: pd.DataFrame,
+                       credentials_path: str,
+                       project_id: str,
+                       table_id: str):
+    """
+    direct upload and overwrite bigquery table with dataframe
+    """
+    credentials = service_account.Credentials.from_service_account_file(credentials_path) if credentials_path else None
+    client = bigquery.Client(project=project_id, credentials=credentials)
+
+    job_config = bigquery.LoadJobConfig(
+        # Specify a (partial) schema. All columns are always written to the
+        # table. The schema is used to assist in data type definitions.
+        schema=[
+            # Specify the type of columns whose type cannot be auto-detected. For
+            # example the "title" column uses pandas dtype "object", so its
+            # data type is ambiguous.
+            bigquery.SchemaField("FUND", bigquery.enums.SqlTypeNames.STRING),
+            bigquery.SchemaField("Date", bigquery.enums.SqlTypeNames.DATE),  # convert datetime64[ns] to DATE type
+            bigquery.SchemaField("Direction", bigquery.enums.SqlTypeNames.STRING),
+            bigquery.SchemaField("Ticker", bigquery.enums.SqlTypeNames.STRING),
+            bigquery.SchemaField("CUSIP", bigquery.enums.SqlTypeNames.STRING),
+            bigquery.SchemaField("Name", bigquery.enums.SqlTypeNames.STRING),
+            # bigquery.SchemaField("Shares", bigquery.enums.SqlTypeNames.INT64),
+            # bigquery.SchemaField("PercentOfETF", bigquery.enums.SqlTypeNames.FLOAT64),
+            bigquery.SchemaField("id", bigquery.enums.SqlTypeNames.STRING),
+        ],
+        # Optionally, set the write disposition. BigQuery appends loaded rows
+        # to an existing table by default, but with WRITE_TRUNCATE write
+        # disposition it replaces the table with the loaded data.
+        write_disposition="WRITE_APPEND",  # WRITE_TRUNCATE = overwrite, WRITE_APPEND = append
+    )
+
+    job = client.load_table_from_dataframe(
+        df, table_id, job_config=job_config
+    )  # Make an API request.
+    job.result()  # Wait for the job to complete.
+    LOGGER.info(f'{df.shape[0]} rows appended to BigQuery  <{table_id}> in project <{project_id}>')
+
+
+def upload_ark_daily(xls_path: str,
+                     credentials_path: str,
+                     project_id: str,
+                     bucket_name: str,
+                     table_id: str,
+                     **kwargs):
     """setting up the google credentials"""
     credentials = service_account.Credentials.from_service_account_file(credentials_path) if credentials_path else None
     storage_client = storage.Client(project=project_id, credentials=credentials)
     bucket = storage_client.bucket(bucket_name)
 
-    xls_path = glob.glob('/data/ark_daily/*.xls')  # path depends on docker-compose.yml
+    path = Path(xls_path)
+    filename = path.stem
+    foldname = "ark_daily"
+    gcs_file = f'{foldname}/{filename}.csv'
 
-    for each_path in xls_path:
-        df_ark = load_ark_xls(each_path)
-        path = Path(each_path)
-
-        filename = path.stem
-        foldname = "ark_daily"
-        gcs_file = f'{foldname}/{filename}.csv'
-
-        if bucket.get_blob(gcs_file) is None:
-            bucket.blob(gcs_file).upload_from_string(df_ark.to_csv(), 'text/csv')
-            LOGGER.info(f'{gcs_file} uploaded to project <{project_id}> in GCS <{bucket_name}> ')
-        else:
-            LOGGER.info(f'this file exist on GCS: {gcs_file}')
+    if bucket.get_blob(gcs_file) is None:
+        df_ark = load_ark_xls(xls_path)
+        bucket.blob(gcs_file).upload_from_string(df_ark.to_csv(), 'text/csv')
+        LOGGER.info(f'{gcs_file} uploaded to GCS <{bucket_name}> in project <{project_id}>')
+        upload_to_bigquery(df_ark, credentials_path, project_id, table_id)
+    else:
+        LOGGER.info(f'{gcs_file} exist in GCS: <{bucket_name}>')
 
 
-dag = DAG("UploadArkDaily", default_args=default_args, schedule_interval="@daily")
-with dag:
-    upload_local_ark_daily_to_gcs = PythonOperator(
-        task_id="upload-ark-daily-to-gcs",
-        python_callable=uploadLocalArkDailyToGCS,
+def create_ark_dag(dag_id, xls_path, dag):
+    return PythonOperator(
+        task_id=dag_id,
+        python_callable=upload_ark_daily,
         provide_context=True,
         op_kwargs={
+            'xls_path': xls_path,
             'credentials_path': '/usr/local/airflow/dags/project-ark2-b9b253cd02fa.json',
             'project_id': 'project-ark2',
             'bucket_name': 'storage-ark2',
-        },
+            'table_id': 'stock.ark_daily',},
+        dag=dag
     )
 
-    upload_local_ark_daily_to_gcs
+
+dag = DAG("upload_ark_daily", default_args=default_args, schedule_interval="@daily")
+with dag:
+
+    dummy_start_up = DummyOperator(task_id='All_jobs_start')
+    dummy_shut_down = DummyOperator(task_id='All_jobs_end')
+
+    xls_path = glob.glob('/data/ark_daily/*.xls')  # path depends on docker-compose.yml
+
+    for each_path in xls_path:
+        dag_name = f"task-upload-{Path(each_path).stem}"
+        dummy_start_up >> create_ark_dag(dag_name, each_path, dag) >> dummy_shut_down  # problem in BQ, Exceeded rate limits: too many table update operations for this table. 
