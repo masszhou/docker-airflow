@@ -25,7 +25,7 @@ LOGGER = logging.getLogger("airflow.task")
 default_args = {
     "owner": "zhiliang zhou",
     "depends_on_past": False,
-    "start_date": datetime.datetime(2020, 12, 31),
+    "start_date": datetime.datetime(2021, 1, 1),
     "email_on_failure": False,
     "email_on_retry": False,
     "retries": 0
