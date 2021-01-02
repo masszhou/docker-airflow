@@ -124,26 +124,47 @@ def upload_ark_daily(xls_path: str,
                      bucket_name: str,
                      table_id: str,
                      **kwargs):
+    local_path = Path(xls_path)
+    filename = local_path.stem
+
+    # check if this xls file already existed in GCS
+    cur_gcs_files = kwargs['ti'].xcom_pull(task_ids='check-ark-daily-gcs')
+    if filename in cur_gcs_files:
+        LOGGER.info(f'{filename} exist in GCS: <{bucket_name}>')
+        return
+
     """setting up the google credentials"""
     credentials = service_account.Credentials.from_service_account_file(credentials_path) if credentials_path else None
     storage_client = storage.Client(project=project_id, credentials=credentials)
     bucket = storage_client.bucket(bucket_name)
 
-    path = Path(xls_path)
-    filename = path.stem
-    foldname = "ark_daily"
-    gcs_file = f'{foldname}/{filename}.csv'
+    df_ark = load_ark_xls(xls_path)
 
-    if bucket.get_blob(gcs_file) is None:
-        df_ark = load_ark_xls(xls_path)
-        bucket.blob(gcs_file).upload_from_string(df_ark.to_csv(), 'text/csv')
-        LOGGER.info(f'{gcs_file} uploaded to GCS <{bucket_name}> in project <{project_id}>')
-        upload_to_bigquery(df_ark, credentials_path, project_id, table_id)
-    else:
-        LOGGER.info(f'{gcs_file} exist in GCS: <{bucket_name}>')
+    gcs_foldname = "ark_daily"
+    gcs_file = f'{gcs_foldname}/{filename}.csv'
+
+    bucket.blob(gcs_file).upload_from_string(df_ark.to_csv(), 'text/csv')
+    LOGGER.info(f'{gcs_file} uploaded to GCS <{bucket_name}> in project <{project_id}>')
+    upload_to_bigquery(df_ark, credentials_path, project_id, table_id)
 
 
-def create_ark_dag(dag_id, xls_path, dag):
+def check_ark_daily_gcs(credentials_path: str,
+                        project_id: str,
+                        bucket_name: str,
+                        **kwargs):
+    credentials = service_account.Credentials.from_service_account_file(credentials_path) if credentials_path else None
+    storage_client = storage.Client(project=project_id, credentials=credentials)
+    bucket = storage_client.bucket(bucket_name)
+
+    gcs_files = [Path(blob.name).stem for blob in storage_client.list_blobs(bucket_name, prefix='ark_daily')]
+    # each.name -> ARK_Trade_12012020_0645PM_EST_5fc6baeab72df
+    
+    # Pushes gcs_files to XCom pool without a specific target, just by returning it
+    # pulled_value_2 = kwargs['ti'].xcom_pull(task_ids='check-ark-daily-gcs')
+    return gcs_files
+
+
+def create_upload_ark_dag(dag_id, xls_path, dag):
     return PythonOperator(
         task_id=dag_id,
         python_callable=upload_ark_daily,
@@ -164,8 +185,34 @@ with dag:
     dummy_start_up = DummyOperator(task_id='All_jobs_start')
     dummy_shut_down = DummyOperator(task_id='All_jobs_end')
 
-    xls_path = glob.glob('/data/ark_daily/*.xls')  # path depends on docker-compose.yml
+    check_ark_daily_gcs_op = PythonOperator(
+        task_id="check-ark-daily-gcs",
+        python_callable=check_ark_daily_gcs,
+        provide_context=True,
+        op_kwargs={
+            'credentials_path': '/usr/local/airflow/dags/project-ark2-b9b253cd02fa.json',
+            'project_id': 'project-ark2', 
+            'bucket_name': 'storage-ark2', 
+            },
+    )
 
-    for each_path in xls_path:
-        dag_name = f"task-upload-{Path(each_path).stem}"
-        dummy_start_up >> create_ark_dag(dag_name, each_path, dag) >> dummy_shut_down  # problem in BQ, Exceeded rate limits: too many table update operations for this table. 
+    local_xls = glob.glob('/data/ark_daily/*.xls')  # path depends on docker-compose.yml
+    dag_ops = []
+    for each in local_xls:
+        dag_name = f"task-upload-{Path(each).stem}"
+        # run all dags parallel
+        # problem: Exceeded rate limits in BQ: too many table update operations for this table. 
+        # dummy_start_up >> create_uoload_ark_dag(dag_name, each, dag) >> dummy_shut_down  
+        dag_ops.append(create_upload_ark_dag(dag_name, each, dag))
+
+    # run dag one by one, to avoid Exceeded rate limits in BigQuery
+    # can be optimized with running by chunks
+    # Problem: with increasing more CSV files, this sequential ops could be not efficent
+    dummy_start_up >> check_ark_daily_gcs_op
+    if len(dag_ops) == 1:
+        check_ark_daily_gcs_op >> dag_ops[0]
+    elif len(dag_ops) > 1:
+        check_ark_daily_gcs_op >> dag_ops[0]
+        for i in range(len(dag_ops)-1):
+            dag_ops[i].set_downstream(dag_ops[i+1])
+    dag_ops[-1] >> dummy_shut_down
