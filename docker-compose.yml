@@ -28,6 +28,7 @@ services:
             - ./requirements.txt:/requirements.txt
             - ./plugins:/usr/local/airflow/plugins
             - ./data:/data
+            - /media/zzhou/data_1/data-passat:/passat
         ports:
             - "8080:8080"
         command: webserver
