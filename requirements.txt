@@ -5,10 +5,16 @@ httplib2
 google-cloud
 google-api-python-client
 google-auth-httplib2
-pandas
 xlrd
 olefile
 pyarrow
 aiohttp
 alpha_vantage
 git+https://github.com/twintproject/twint.git@origin/master#egg=twint
+rospkg
+tdqm
+pymongo
+opencv-python
+py3rosmsgs
+pycryptodome
+pycryptodomex

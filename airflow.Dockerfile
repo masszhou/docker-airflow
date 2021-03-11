@@ -1,8 +1,11 @@
 # changes:
 # 1. integrated gcp twint into image
 # 2. fix SQLAlchemy==1.3.15
-# BUILD: docker build --rm --build-arg AIRFLOW_DEPS="gcp" -t masszhou/docker-airflow:1.10.9-gcp .
-# DEBUG: docker exec -ti docker-airflow_webserver_1 bash 
+# 3. add opencv dependencies
+# build: 
+#   docker build --rm --build-arg AIRFLOW_DEPS="gcp" -t masszhou/docker-airflow:1.10.9-gcp -f airflow.Dockerfile .
+# debug: 
+#   docker exec -ti docker-airflow_webserver_1 bash 
 
 # VERSION 1.10.9
 # AUTHOR: Matthieu "Puckel_" Roisil
@@ -56,6 +59,9 @@ RUN set -ex \
         netcat \
         locales \
         git \
+        ffmpeg \
+        libsm6 \
+        libxext6 \
     && sed -i 's/^# en_US.UTF-8 UTF-8$/en_US.UTF-8 UTF-8/g' /etc/locale.gen \
     && locale-gen \
     && update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 \
@@ -69,8 +75,9 @@ RUN set -ex \
     && pip install apache-airflow[crypto,celery,postgres,hive,jdbc,mysql,ssh${AIRFLOW_DEPS:+,}${AIRFLOW_DEPS}]==${AIRFLOW_VERSION} \
     && pip install 'redis==3.2' \
     && pip install pandas numpy google-cloud-storage httplib2 google-cloud google-api-python-client google-auth-httplib2 \
-    && if [ -n "${PYTHON_DEPS}" ]; then pip install ${PYTHON_DEPS}; fi \
-    && apt-get purge --auto-remove -yqq $buildDeps \
+    && if [ -n "${PYTHON_DEPS}" ]; then pip install ${PYTHON_DEPS}; fi
+
+RUN apt-get purge --auto-remove -yqq $buildDeps \
     && apt-get autoremove -yqq --purge \
     && apt-get clean \
     && rm -rf \
